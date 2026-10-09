@@ -1,6 +1,6 @@
 # Notas - VPS do zero
 
-## Dia 1 - 08/10/2026
+## Dia 1 - 08/10/2026-09/10/2026
 
 ### 1. Chave SSH
 - Comando: `ssh-keygen -t ed25519 -C "gabriel-vps"`
