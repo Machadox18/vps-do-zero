@@ -124,3 +124,88 @@
 
 ## Parei em
 - Dia 1 concluído. Próximo: Dia 2 (criar meu usuário e acessar com chave)
+
+## Dia 2 - 10/10/2026
+
+### Conceitos
+- Não trabalhar como root: um erro como root pode destruir o servidor (vivi isso no Dia 1)
+- Princípio do menor privilégio: cada um tem só o poder de que precisa
+- `sudo`: executa UM comando como root, pede a MINHA senha e fica registrado em log
+- Prompt: `#` = root, `$` = usuário comum
+
+### 1. Criar meu usuário
+- `adduser gabriel`: cria o usuário (a senha dele é a que o sudo pede)
+- `usermod -aG sudo gabriel`: coloca no grupo sudo
+  - `-G` define grupos extras; `-a` ADICIONA sem tirar dos outros
+  - Sem o `-a`, o usuário perde todos os outros grupos (erro clássico)
+- `id gabriel`: conferir se aparece 27(sudo)
+- O /etc/sudoers do Ubuntu já libera o sudo para quem está no grupo sudo
+
+### 2. Copiar a chave para o gabriel
+- `rsync --archive --chown=gabriel:gabriel ~/.ssh /home/gabriel`
+  - Copia o .ssh do root (com o authorized_keys) para a pasta do gabriel
+  - `--archive` mantém permissões e datas; `--chown` troca o dono para gabriel
+  - Sem o dono e as permissões certas, o SSH recusa a chave
+- `ls -la /home/gabriel/.ssh`: pasta 700 (drwx------), authorized_keys 600 (-rw-------)
+
+### 3. Testar o acesso
+- Sempre testar numa NOVA janela, mantendo a do root aberta
+- `ssh gabriel@IP`, depois `sudo whoami` deve pedir senha e responder root
+- O sudo não transforma o usuário em root de vez: `whoami` volta a ser gabriel depois
+
+### 4. Atalho de conexão (no Windows, não no servidor)
+- Arquivo `C:\Users\admin\.ssh\config` (sem extensão)
+- Conteúdo: Host lab / HostName IP / User gabriel / IdentityFile ~/.ssh/id_ed25519
+- Agora basta `ssh lab`
+- Pasta .ssh do Windows:
+  - id_ed25519 = chave privada; id_ed25519.pub = pública
+  - known_hosts = impressões digitais dos servidores em que confiei
+  - known_hosts.old = backup (criado quando recriei a VPS com o mesmo IP)
+
+### 5. Logs
+- `sudo journalctl -n 20`: últimas 20 linhas de log do sistema inteiro
+  - `--no-pager` mostra as linhas completas
+  - audit type=1400 = AppArmor (segurança do Ubuntu), normal
+  - apt-news / esm-cache / packagekit = tarefas automáticas de pacotes
+  - [UFW BLOCK] = firewall bloqueando conexão vinda da internet
+- `/var/log/auth.log`: logins, sudo, su, criação de usuários (precisa de sudo para ler)
+  - `sudo tail -n 30 /var/log/auth.log`: últimas linhas
+  - `sudo tail -f /var/log/auth.log`: ao vivo
+  - `sudo grep "Accepted" ...`: logins que deram certo
+  - `sudo grep "Failed password" ...` e `"Invalid user"`: tentativas dos robôs
+  - `grep -c`: conta as linhas
+  - Horário do auth.log em UTC (+00:00): 20:26 UTC = 17:26 em São Paulo
+- Cada sudo fica registrado: quem, terminal, pasta, como quem e comando exato
+
+### Robôs atacando
+- Programas automáticos varrem todos os IPs da internet atrás de SSH aberto
+- Testam usuário/senha comuns (root/123456, admin/admin...)
+- Não é pessoal: a VPS foi atacada horas depois de criada
+- Vêm de outros servidores já invadidos (corrente)
+- Querem o servidor para: minerar cripto, botnet/DDoS, spam, phishing, atacar outros, roubar dados
+- `[preauth]` = conexão encerrada antes de completar o login
+- Defesa: senha forte agora; no Dia 3 desligar senha + fail2ban; no Dia 4 firewall
+
+### Descoberta
+- A imagem Ubuntu da Vultr já vem com o UFW ligado (só porta 22 liberada)
+- `sudo ufw status verbose` para ver as regras
+- No Dia 4 vou ajustar um firewall que já existe, não criar do zero
+
+### Erros que tive
+- `rsync ... ~/.ssh/home/gabriel`: faltou espaço entre origem e destino
+  - Sem destino, o rsync só lista o que copiaria
+  - Digitar só `/home/gabriel` tenta executar a pasta ("Is a directory")
+- Rodei `sudo whoami` como root e não pediu senha: root não precisa; o teste é como gabriel
+- Arquivo config ficou vazio (0 bytes): o Bloco de Notas não salvou
+  - Resolvi gravando pelo PowerShell com `Set-Content -Encoding ascii`
+- `ssh: Could not resolve hostname lab`: o SSH não achou o atalho e procurou "lab" na internet
+- `systemctl` x `journalctl`: confundi as opções de novo; -u, -n e -f são do journalctl
+
+### Checklist do Dia 2
+- [x] Entro com `ssh lab` como gabriel, sem senha de login
+- [x] `sudo whoami` responde root
+- [x] Sei explicar por que não se trabalha como root
+- [x] Vi tentativas de login estranhas no auth.log
+
+## Parei em
+- Dia 2 concluído. Próximo: Dia 3 (hardening do SSH e fail2ban)
