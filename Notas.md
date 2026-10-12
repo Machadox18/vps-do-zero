@@ -209,3 +209,177 @@
 
 ## Parei em
 - Dia 2 concluído. Próximo: Dia 3 (hardening do SSH e fail2ban)
+
+## Dia 3 - 12/10/2026
+
+### Conceitos
+- Hardening: "endurecer" o servidor = reduzir as formas de ataque (tirar o que não usa, fechar o que não precisa, dificultar o resto)
+- sshd: o programa servidor do SSH (o "d" é de daemon, programa de fundo); no Ubuntu o serviço se chama `ssh`
+- cloud-init: ferramenta que configura a VPS no primeiro boot com as escolhas do painel (hostname, chave, rede, senha de root)
+- 50-cloud-init.conf: arquivo que o cloud-init pode criar no sshd_config.d, às vezes religando a senha
+- fail2ban: lê os logs e bane por um tempo os IPs que erram o login várias vezes
+- Defesa em camadas: nenhuma proteção sozinha é perfeita, então empilho várias
+
+### 1. Tamanho do ataque
+- `sudo journalctl -u ssh --since "1 day ago" | grep -i "invalid user" | head`
+  - `|` (pipe) passa a saída de um comando para o próximo
+  - `grep -i` ignora maiúsculas/minúsculas; `head` mostra as 10 primeiras linhas
+- Cada tentativa gera 3 linhas: Invalid user / Failed password / Disconnected [preauth]
+- Mesmo número em `sshd[21397]` = mesma tentativa (PID)
+- Nomes testados: comuns (marko, bryan) e de programas com senha padrão (sinusbot, graylog)
+- 2 IPs revezando, cerca de 1 tentativa por minuto cada (devagar de propósito, para não chamar atenção)
+- `... | wc -l` deu 13.459 linhas = cerca de 4.500 tentativas em 24h (3 por minuto)
+- `grep -c` conta linhas direto, sem precisar do `wc -l`
+
+### 2. Configuração do SSH
+- `sudo nano /etc/ssh/sshd_config.d/00-hardening.conf`
+- Conteúdo e o que cada linha faz:
+  - `PermitRootLogin no`: ninguém entra direto como root, nem com chave
+  - `PasswordAuthentication no`: desliga o login por senha
+  - `KbdInteractiveAuthentication no`: fecha o caminho alternativo de digitar senha
+  - `PubkeyAuthentication yes`: mantém o login por chave
+  - `MaxAuthTries 3`: no máximo 3 tentativas por conexão
+  - `AllowUsers gabriel`: só o gabriel entra por SSH
+- Por que o nome `00-hardening.conf`:
+  - O SSH lê os arquivos da pasta em ordem alfabética e o PRIMEIRO valor vence
+  - `00-` vem antes de `50-cloud-init.conf`, então minhas regras prevalecem
+  - `.conf` é obrigatório: o sshd_config tem `Include /etc/ssh/sshd_config.d/*.conf`
+- Edito um arquivo extra em vez do sshd_config original: separado, fácil de desfazer, não é sobrescrito em atualizações
+
+### 3. Validar e aplicar
+- O arquivo sozinho não muda nada: só vale depois de reiniciar o SSH
+- `sudo sshd -t`: testa a sintaxe (sem saída = sem erro). Erro aqui poderia me trancar fora
+- `sudo sshd -T | grep -Ei 'permitrootlogin|passwordauthentication|allowusers'`: mostra a configuração EFETIVA (o que realmente venceu)
+- `sudo systemctl restart ssh`: aplica
+
+### 4. Testes (sempre do Windows, numa janela nova)
+- `ssh lab` → entra como gabriel com a chave
+- `ssh root@IP` → Permission denied (publickey)
+- `ssh -o PubkeyAuthentication=no gabriel@IP` → Permission denied, sem pedir senha
+  - `-o` passa uma opção só para aquela conexão
+  - Simula um robô sem a chave: se nem o gabriel tem senha, não há senha para adivinhar
+- `Last login: ... from 189.27.244.83` = IP da minha casa; IP desconhecido ali seria alerta
+
+### 5. Porta do SSH
+- Mantive a 22: trocar só reduz ruído, não é segurança de verdade
+- No 24.04 o SSH usa ativação por socket; trocar exigiria daemon-reload, restart ssh.socket e liberar no firewall antes
+
+### 6. fail2ban
+- `sudo apt install -y fail2ban`
+- `sudo nano /etc/fail2ban/jail.local` (nunca editar o jail.conf: é sobrescrito nas atualizações; o .local tem prioridade)
+- Conteúdo:
+  - `[sshd]`: a jail ("cela", regra de vigilância) do SSH
+  - `enabled = true`: liga
+  - `backend = systemd`: lê os logs pelo journal
+  - `maxretry = 5` + `findtime = 10m` + `bantime = 1h`: 5 falhas em 10 minutos = IP banido por 1 hora
+- `sudo systemctl enable --now fail2ban`: liga no boot (enable) e já inicia (--now)
+- `sudo systemctl restart fail2ban`: reinicia para ler o jail.local (programas leem a config ao iniciar)
+- `sudo fail2ban-client status sshd`:
+  - Filter = quem lê os logs (Currently failed, Total failed)
+  - Journal matches: `_SYSTEMD_UNIT=sshd.service + _COMM=sshd` (o + é "ou"; no Ubuntu é o _COMM=sshd que pega)
+  - Actions = quem bane (Currently banned, Total banned, Banned IP list)
+  - Tudo zerado logo depois do restart: os contadores recomeçam
+- `sudo journalctl -u fail2ban -n 30`: Started/Server ready (instalação), Stopping/Shutdown (restart), Started de novo (com o jail.local)
+- Com a senha desligada, o fail2ban não é o que impede a invasão: ele corta o barulho e poupa recursos
+
+### Nano
+- `^` = Ctrl, `M-` = Alt
+- Ctrl+O salva (confirmar o nome com Enter), Ctrl+X sai
+- Colar no terminal do Windows: botão direito do mouse
+- Conferir o que ficou gravado: `cat arquivo`
+
+### Erros que tive
+- Rodei comando do servidor no PowerShell: `grep` não existe no Windows
+  - Olhar o prompt: `PS C:\...>` = Windows; `gabriel@lab-vps:~$` = servidor; `#` = root
+- `grep` sem o que procurar: "Usage: grep [OPTION]... PATTERNS"
+- Um comando longo dividido em dois: `-i "invalid user"` executado sozinho deu "command not found"
+  - O comando só termina onde EU aperto Enter
+- `nano /est/ssh/...` e espaço no nome do arquivo: o nano abriu 2 arquivos ([1/2]) no caminho errado
+  - Saí com Ctrl+X e N (sem salvar) em cada um
+- Testei `ssh root@IP` de dentro do servidor: o teste precisa sair do Windows
+  - Depois do `ssh lab`, a janela vira o servidor; `exit` para voltar ao PowerShell
+
+### Checklist do Dia 3
+- [x] Login como root é recusado
+- [x] Login por senha é recusado
+- [x] `fail2ban-client status sshd` mostra a jail ativa
+- [x] Sei explicar por que o arquivo se chama `00-hardening.conf`
+- Pendente: rodar `sudo fail2ban-client status sshd` depois de um dia para ver IPs banidos
+
+## Dia 4 - 12/10/2026
+
+### Conceitos
+- Porta: IP é o prédio, porta é o apartamento. 22 SSH, 80 HTTP, 443 HTTPS, 5432 Postgres, 3306 MySQL
+- Escutar numa porta = programa esperando conexões
+- Firewall: o porteiro; decide quais conexões entram, por porta
+- UFW: interface simples para o firewall do kernel (iptables/nftables)
+- Incoming = conexões que chegam; outgoing = conexões que o servidor abre (apt, DNS, Docker baixando imagens)
+- Routed = tráfego que passa pelo servidor de uma rede para outra (relação com o Docker no Dia 5)
+
+### 1. Configuração do UFW
+- A imagem da Vultr já vinha com o UFW ATIVO, então as mudanças valeram na hora
+- `sudo ufw default deny incoming`: bloqueia tudo que chega por padrão
+- `sudo ufw default allow outgoing`: libera tudo que sai
+- "be sure to update your rules accordingly" = liberar o que precisa continuar funcionando
+- `sudo ufw allow 22/tcp` PRIMEIRO, depois testei `ssh lab` numa janela nova
+- `sudo ufw allow 80/tcp` e `sudo ufw allow 443/tcp`
+  - Cada allow gera 2 regras: `Rule added` (IPv4) e `Rule added (v6)` (IPv6)
+- `sudo ufw show added`: regras que EU cadastrei
+- `sudo ufw enable`: liga e mantém ligado no boot
+  - Pergunta "may disrupt existing ssh connections": y é seguro porque a 22 já estava liberada e testada
+- `sudo ufw status verbose`: o que o firewall está aplicando de fato
+  - Logging: on (low) = gera as linhas [UFW BLOCK] no journal
+  - Default: deny (incoming), allow (outgoing), disabled (routed)
+  - New profiles: skip = não aplica perfis de programas automaticamente
+  - To / Action / From: porta, ALLOW IN, Anywhere (de qualquer IP)
+
+### 2. Testes de fora (do Windows)
+- No PowerShell, `curl` é apelido do Invoke-WebRequest (pediu "Uri:"); usar `curl.exe`
+- `nc` não existe no Windows; o equivalente é `Test-NetConnection IP -Port N`
+- `curl.exe -I http://IP` → Couldn't connect: porta 80 liberada, mas sem programa nela (recusa)
+  - `-I` pede só os cabeçalhos da resposta
+  - Demorou 2140 ms porque o Windows tenta mais 2 vezes após uma recusa
+- `Test-NetConnection IP -Port 22` → TcpTestSucceeded: True (liberada e com o sshd)
+- `Test-NetConnection IP -Port 3306` → TcpTestSucceeded: False (bloqueada pelo firewall)
+  - PingSucceeded: True, RTT 21 ms (vantagem de usar São Paulo)
+  - SourceAddress 192.168.15.97 = meu IP na rede de casa; o IP público é o do roteador
+- Recusa rápida = passou pelo firewall, mas ninguém escuta; demora/timeout = firewall descartou
+- Testar de dentro do servidor não vale: acessar o próprio IP nem sai para a internet
+- Esperar o prompt voltar antes de digitar o próximo comando (as barras de progresso bagunçaram a tela)
+
+### 3. Atualizações automáticas
+- `sudo apt install -y unattended-upgrades`: já vinha instalado
+  - Sobrou o `nginx-common` do Dia 1 → `sudo apt autoremove --purge -y`
+- `sudo dpkg-reconfigure -plow unattended-upgrades`: refaz as perguntas do pacote (-plow mostra todas)
+- `cat /etc/apt/apt.conf.d/20auto-upgrades`: os dois valores "1" = atualizar lista e instalar diariamente
+- `sudo unattended-upgrade --dry-run --debug | tail -20`: ensaio, sem instalar nada
+  - pin -32768 no noble-updates = nunca instala dali automaticamente; só noble-security entra sozinho
+  - Identifica os pacotes do kernel para nunca remover o que está rodando (6.8.0-146)
+  - As 2 atualizações pendentes (open-iscsi, libopeniscsiusr) vêm do noble-updates, então ficam para mim
+  - "No packages found that can be upgraded unattended" = nenhuma de segurança pendente hoje
+- `sudo apt upgrade -y` para instalar as comuns manualmente
+- `ls /var/run/reboot-required`: "No such file" = não precisa reiniciar
+- Erros: `unatted-upgrade` e `unattnded-upgrade` (digitação); o nome certo é unattended-upgrade, no singular
+
+### 4. Comparação: o que mudou
+| | Dia 1 (com nginx) | Dia 4 antes do firewall | Dia 4 depois do firewall |
+| --- | --- | --- | --- |
+| Programas escutando (`ss -tulpn`) | sshd :22, nginx :80, DNS local, DHCP | sshd :22, DNS local, DHCP | Igual ao "antes" (mesmo PID 38346) |
+| Política de entrada | UFW da Vultr, só 22 | deny incoming, 22 liberada | deny incoming |
+| Portas liberadas no firewall | 22 | 22 | 22, 80, 443 (IPv4 e IPv6) |
+| Visto da internet | 22 | 22 | 22 responde; 80 passa mas recusa; 3306 bloqueada |
+
+- O `ss` não muda com o firewall: ele mostra programas, não regras
+- O firewall muda quem consegue CHEGAR até os programas
+- Para ver o efeito do firewall: `ufw status` + testes de fora
+- O PID do sshd mudou entre o Dia 1 (1043) e o Dia 3 (38346) porque reiniciei o SSH
+- `0.0.0.0` / `[::]` = aceita de qualquer lugar; `127.x` = só o próprio servidor
+
+### Checklist do Dia 4
+- [x] `ufw status verbose` mostra deny incoming e só 22, 80 e 443 liberadas
+- [x] Testei uma porta bloqueada e uma liberada de fora
+- [x] O dry run do unattended-upgrades roda sem erro
+- [x] Sei a diferença entre escutar em 0.0.0.0 e em 127.0.0.1
+
+## Parei em
+- Dia 4 concluído. Próximo: Dia 5 (Docker na prática)
