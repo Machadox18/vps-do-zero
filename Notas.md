@@ -258,7 +258,7 @@
 - `ssh -o PubkeyAuthentication=no gabriel@IP` → Permission denied, sem pedir senha
   - `-o` passa uma opção só para aquela conexão
   - Simula um robô sem a chave: se nem o gabriel tem senha, não há senha para adivinhar
-- `Last login: ... from 189.27.244.83` = IP da minha casa; IP desconhecido ali seria alerta
+- `Last login: ... from IP_DE_CASA` = IP da minha casa; IP desconhecido ali seria alerta
 
 ### 5. Porta do SSH
 - Mantive a 22: trocar só reduz ruído, não é segurança de verdade
@@ -433,7 +433,7 @@
 - `sudo usermod -aG docker gabriel`, depois `exit` e `ssh lab` (grupos só carregam no login)
 - `groups` → gabriel sudo users docker
 - Atenção: grupo docker = acesso de root (um container pode montar qualquer pasta do servidor)
-- Last login de outro IP (187.32.237.42): acessei de outra rede; conferir logins com `sudo grep "Accepted" /var/log/auth.log | tail`
+- Last login de outro IP (IP_DE_OUTRA_REDE): acessei de outra rede; conferir logins com `sudo grep "Accepted" /var/log/auth.log | tail`
 
 ### 3. Ciclo de vida de um container
 - `docker pull nginx:alpine`: baixa a imagem sem rodar
